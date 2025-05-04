@@ -8,6 +8,7 @@ from tensorflow.keras.callbacks import History
 import os
 import joblib
 import io
+from datetime import timedelta
 
 st.set_page_config(page_title="Time-Series Prediction Project", layout="wide")
 st.markdown("""
@@ -45,7 +46,7 @@ st.write('<p style="font-size:130%;color:orange;font-weight: bold">Project Overv
 st.write('<p style="color:yellow; font-weight:bold;">This project uses neural networks (LSTM or MLP) to predict time-series data using regression (predicting exact values).</p>', unsafe_allow_html=True)
 
 st.sidebar.title("Navigation")
-option = st.sidebar.radio("Choose section:", ["Info", "Preprocessing", "Train Model", "Prediction Plot", "Loss Curve", "Model Accuracy"])
+option = st.sidebar.radio("Choose section:", ["Info", "Preprocessing", "Train Model", "Prediction Plot", "Loss Curve", "Model Accuracy", "Future Prediction"])
 
 SEQUENCE_LENGTH = 20
 MODEL_PATH = "model.keras"
@@ -129,6 +130,7 @@ def build_model(input_shape, model_type="LSTM"):
         model.add(Dropout(0.2))
         model.add(LSTM(100, return_sequences=False))
         model.add(Dropout(0.2))
+        
     elif model_type == "MLP":
         model.add(Dense(64, input_shape=input_shape, activation='relu'))
         model.add(Dropout(0.2))
@@ -167,6 +169,7 @@ if uploaded_file:
 
         if target_column == "-- Select a column --":
             st.warning("Please select a numerical column to proceed.")
+
         else:
             st.success(f"Selected column for prediction: **{target_column}**")
 
@@ -292,5 +295,74 @@ if uploaded_file:
                         st.warning("Accuracy metrics not found. Please train the model first.")
                 except Exception as e:
                     st.error(f"Failed to load accuracy metrics: {e}")
+
+            elif option == "Future Prediction":
+                try:
+                    if not os.path.exists(MODEL_PATH):
+                        st.error("Model not found. Please train the model first.")
+                    else:
+                        model = load_model(MODEL_PATH)
+                        df_cleaned = df.dropna(how='any').dropna(how='any', axis=1)
+                        
+                        if target_column not in df_cleaned.columns:
+                            st.error(f"Column '{target_column}' not found in the dataset.")
+                        else:
+                            data = df_cleaned[target_column].astype(float).values
+                            if len(data) < SEQUENCE_LENGTH:
+                                st.error(f"Dataset has {len(data)} rows, but at least {SEQUENCE_LENGTH} rows are required.")
+                            else:
+                                # Get the last sequence of closing prices
+                                last_sequence = data[-SEQUENCE_LENGTH:]
+                                shifted_value = last_sequence.mean()
+                                last_sequence = last_sequence - shifted_value
+                                
+                                # Predict the next 7 days
+                                num_days = 7
+                                predictions = []
+                                current_sequence = last_sequence.copy()
+                                
+                                for _ in range(num_days):
+                                    if model_type == "LSTM":
+                                        current_sequence_reshaped = current_sequence.reshape(1, SEQUENCE_LENGTH, 1)
+                                    else:  # MLP
+                                        current_sequence_reshaped = current_sequence.flatten().reshape(1, -1)
+                                    pred = model.predict(current_sequence_reshaped, verbose=0)
+                                    pred_value = pred[0][0] + shifted_value
+                                    predictions.append(pred_value)
+                                    current_sequence = np.roll(current_sequence, -1)
+                                    current_sequence[-1] = pred[0][0]
+                                
+                                # Generate dates for the next 7 days (assuming last date is May 4, 2025)
+                                last_date = pd.to_datetime("2025-05-04")  # Adjust based on your data
+                                dates = [last_date + timedelta(days=i+1) for i in range(num_days)]
+                                
+                                # Create a DataFrame for predictions
+                                prediction_df = pd.DataFrame({
+                                    "Date": dates,
+                                    "Predicted Closing Price": predictions
+                                })
+                                
+                                st.subheader("Future Predictions for the Next Week")
+                                st.write("Predicted closing prices from May 5 to May 11, 2025:")
+                                st.dataframe(prediction_df)
+                                
+                                # Plot the predictions
+                                fig, ax = plt.subplots()
+                                ax.plot(dates, predictions, label="Predicted", marker='o')
+                                ax.set_title(f"Predicted Closing Prices for {target_column}")
+                                ax.set_xlabel("Date")
+                                ax.set_ylabel(target_column)
+                                ax.legend()
+                                ax.grid(True)
+                                plt.xticks(rotation=45)
+                                st.pyplot(fig)
+                                
+                                # Save predictions to CSV
+                                prediction_df.to_csv("future_predictions.csv", index=False)
+                                st.write("Future predictions saved to 'future_predictions.csv'")
+                                
+                except Exception as e:
+                    st.error(f"Failed to generate future predictions: {e}")
+
 else:
     st.info("Please upload a dataset to begin.")
